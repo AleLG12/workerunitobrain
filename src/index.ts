@@ -93,6 +93,7 @@ const SYSTEM_SECRETS = [
   'CF_STORE_ID',
   'INTERNAL_TOKEN',
   'CF_API_TOKEN',
+  'AGENTE_LN1_TOKEN',
 ]
 
 async function leerTodas(env: any): Promise<Record<string, any>> {

@@ -34,5 +34,10 @@
 			"store_id": "11fbebe4558942ca86d345294b06dbfd",
 			"secret_name": "CF_STORE_ID",
 		},
+		{
+			"binding": "AGENTE_LN1_TOKEN",
+			"store_id": "11fbebe4558942ca86d345294b06dbfd",
+			"secret_name": "AGENTE_LN1_TOKEN",
+		},
 	],
 }
