@@ -29,28 +29,71 @@ export default {
         return json(normalizar(data[area], area))
       }
 
+      const matchRename = path.match(/^\/areas\/([^/]+)\/rename$/)
+
+      if (matchRename && method === 'POST') {
+        const area = decodeURIComponent(matchRename[1])
+        const body = (await request.json()) as any
+        const nuevo = String(body.nuevo || '').trim()
+        if (!nuevo) return json({ error: 'Falta el nuevo nombre del área' }, 422)
+        if (esAreaPrincipal(area)) {
+          return json({ error: 'No se pueden renombrar las áreas principales' }, 422)
+        }
+
+        const data = await leerTodas(env)
+        if (!data[area]) return json({ error: `Área [${area}] no encontrada` }, 404)
+
+        if (!mismoNombre(area, nuevo) && existeNombre(data, nuevo)) {
+          return json({ error: `El área [${nuevo}] ya existe`, campo: 'area' }, 409)
+        }
+
+        const payload = construirPayload(body)
+        const duplicada = buscarDuplicada(data, payload, area)
+        if (duplicada) return json(errorDuplicada(duplicada), 409)
+
+        delete data[area]
+        data[nuevo] = payload
+        await persistirTodas(env, data)
+        return json({ message: `Área [${area}] renombrada a [${nuevo}] correctamente` })
+      }
+
       if (match && method === 'PUT') {
         const area = decodeURIComponent(match[1])
         const body = (await request.json()) as any
-        await upsertArea(env, area, body)
+        const data = await leerTodas(env)
+        if (!data[area]) return json({ error: `Área [${area}] no existe` }, 404)
+
+        const payload = construirPayload(body)
+        const duplicada = buscarDuplicada(data, payload, area)
+        if (duplicada) return json(errorDuplicada(duplicada), 409)
+
+        data[area] = payload
+        await persistirTodas(env, data)
         return json({ message: `Área [${area}] actualizada correctamente` })
       }
 
       if (path === '/areas' && method === 'POST') {
         const body = (await request.json()) as any
-        const area = (body.area || '').trim()
+        const area = String(body.area || '').trim()
         if (!area) return json({ error: 'Falta el nombre del área' }, 422)
 
         const data = await leerTodas(env)
-        if (data[area]) return json({ error: `El área [${area}] ya existe` }, 409)
+        if (existeNombre(data, area)) {
+          return json({ error: `El área [${area}] ya existe`, campo: 'area' }, 409)
+        }
 
-        await upsertArea(env, area, body)
+        const payload = construirPayload(body)
+        const duplicada = buscarDuplicada(data, payload)
+        if (duplicada) return json(errorDuplicada(duplicada), 409)
+
+        data[area] = payload
+        await persistirTodas(env, data)
         return json({ message: `Área [${area}] creada correctamente` }, 201)
       }
 
       if (match && method === 'DELETE') {
         const area = decodeURIComponent(match[1])
-        if (area === 'Sistemas' || area === 'Marketing') {
+        if (esAreaPrincipal(area)) {
           return json({ error: 'No se pueden eliminar las áreas principales' }, 422)
         }
         const data = await leerTodas(env)
@@ -82,6 +125,7 @@ export default {
 
       return json({ error: 'Ruta no encontrada' }, 404)
     } catch (error: any) {
+      if (error instanceof ErrorValidacion) return json({ error: error.message }, 422)
       return json({ error: error.message || 'Error interno' }, 500)
     }
   },
@@ -123,26 +167,74 @@ async function persistirTodas(env: any, data: Record<string, any>) {
   })
 }
 
-async function upsertArea(env: any, area: string, body: any) {
+class ErrorValidacion extends Error {}
+
+function esAreaPrincipal(area: string): boolean {
+  return area === 'Sistemas' || area === 'Marketing'
+}
+
+function mismoNombre(a: string, b: string): boolean {
+  return a.trim().toLowerCase() === b.trim().toLowerCase()
+}
+
+function existeNombre(data: Record<string, any>, nombre: string): boolean {
+  return Object.keys(data).some((existente) => mismoNombre(existente, nombre))
+}
+
+function normalizarHost(host: string): string {
+  return host
+    .trim()
+    .toLowerCase()
+    .replace(/^https?:\/\//, '')
+    .replace(/[/?#].*$/, '')
+}
+
+function construirPayload(body: any) {
   const payload = {
-    host: (body.host || '').trim(),
-    email: (body.email || '').trim(),
-    token: (body.token || '').trim(),
+    host: String(body.host || '').trim(),
+    email: String(body.email || '').trim(),
+    token: String(body.token || '').trim(),
     sprint_field: body.sprint_field || 'customfield_10020',
     epic_link_mode: body.epic_link_mode || 'parent',
     epic_link_field: body.epic_link_field ?? null,
   }
 
   if (!payload.host || !payload.email || !payload.token) {
-    throw new Error('host, email y token son obligatorios')
+    throw new ErrorValidacion('host, email y token son obligatorios')
   }
   if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(payload.email)) {
-    throw new Error('El email no es válido')
+    throw new ErrorValidacion('El email no es válido')
   }
 
-  const data = await leerTodas(env)
-  data[area] = payload
-  await persistirTodas(env, data)
+  return payload
+}
+
+function buscarDuplicada(
+  data: Record<string, any>,
+  payload: { host: string; token: string },
+  excluir?: string
+): string | null {
+  const host = normalizarHost(payload.host)
+
+  for (const [nombre, config] of Object.entries(data)) {
+    if (excluir !== undefined && nombre === excluir) continue
+    if (!config || typeof config !== 'object') continue
+    if (
+      normalizarHost(String(config.host || '')) === host &&
+      String(config.token || '').trim() === payload.token
+    ) {
+      return nombre
+    }
+  }
+
+  return null
+}
+
+function errorDuplicada(existente: string) {
+  return {
+    error: `Ya existe el área [${existente}] con el mismo host y token de Jira`,
+    campo: 'token',
+  }
 }
 
 function normalizar(config: any, area: string) {
